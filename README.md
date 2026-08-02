@@ -101,7 +101,7 @@ environments.wsl.distro           = <MINERU_WSL_DISTRO 覆盖后的值>
 |----------|--------------|
 | `ImportError: libGL.so.1: ...` | [WSL2 Ubuntu 22.04 libgl](https://github.com/opendatalab/MinerU/blob/master/docs/zh/faq/index.md#wsl2-ubuntu2204-libgl) |
 | `no kernel image is available for execution on the device` | [Windows CUDA 加速](https://github.com/opendatalab/MinerU/blob/master/docs/zh/faq/index.md#windows-cuda-acceleration) |
-| 推理慢 / CUDA 未启用 | [Windows CUDA 加速](https://github.com/openduresky/MinerU/blob/master/docs/zh/faq/index.md#windows-cuda-acceleration) |
+| 推理慢 / CUDA 未启用 | [Windows CUDA 加速](https://github.com/opendatalab/MinerU/blob/master/docs/zh/faq/index.md#windows-cuda-acceleration) |
 | 缺 CJK 字体 | [Linux 缺 CJK 字体](https://github.com/opendatalab/MinerU/blob/master/docs/zh/faq/index.md#linux-missing-text-cjk-fonts) |
 | vllm + lmdeploy 都没装 | [扩展模块安装](https://github.com/opendatalab/MinerU/blob/master/docs/zh/quick_start/extension_modules.md) |
 | Docker 在 macOS 上失败 | [Docker 部署](https://github.com/opendatalab/MinerU/blob/master/docs/en/quick_start/docker_deployment.md) |
