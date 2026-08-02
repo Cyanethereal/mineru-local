@@ -141,3 +141,30 @@ ch ch_server korean ta te ka th el arabic east_slavic cyrillic devanagari
 | 4 | 后端在该环境不可用 |
 | 5 | `returncode==0` 但没有产物 |
 | 其他 | 透传 `mineru` 退出码 |
+
+
+`fallback` 字段（v1.2.0.1+）：
+
+```json
+{
+  "fallback": {
+    "used": true,
+    "requested_env": "auto",
+    "actual_env": "windows",
+    "requested_backend": "hybrid-engine",
+    "actual_backend": "pipeline",
+    "reason": "WSL 无 vLLM；hybrid 不可用",
+    "smoke_attempts": [
+      {"env": "wsl", "ok": false, "error": "no vllm package"},
+      {"env": "windows", "ok": true, "error": null}
+    ]
+  }
+}
+```
+
+- `used`: `true` 表示发生降级；`false` 表示无降级
+- `requested_env` / `actual_env`: 字符串，传入 vs 实际
+- `requested_backend` / `actual_backend`: 字符串，请求 vs 实际
+- `reason`: 一句话说明降级原因
+- `smoke_attempts`: auto 模式下每个环境 smoke test 的结果
+

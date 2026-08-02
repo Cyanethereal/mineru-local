@@ -90,3 +90,20 @@ Check failed: status == cudaSuccess no kernel image is available for execution o
 | 5 | 鏃?Markdown 浜х墿 | 妫€鏌ユā鍨嬨€佽緭鍏ユ枃浠躲€佹槸鍚﹂渶瑕?OCR |
 | 124/127 | 鍛戒护鏈壘鍒?瓒呮椂 | 妫€鏌?WSL/PATH |
 | 鍏朵粬 | 閫忎紶 `mineru` 閫€鍑虹爜 | 鐪?stderr_tail |
+
+
+### 我请求 hybrid-engine 但被降级到 pipeline
+
+报告里会有 `fallback.used: true` + `fallback.reason` + `fallback.smoke_attempts` 数组。
+
+诊断步骤：
+1. 看 `smoke_attempts[0]` (WSL) 和 `smoke_attempts[1]` (Windows) 的 `ok` 字段
+2. 如果 WSL smoke 失败 → WSL 内装 vLLM：
+   ```bash
+   wsl -d Ubuntu-24.04
+   pip install "mineru[core,vllm]"
+   ```
+3. 如果 Windows smoke 失败 → Windows 重装 mineru 或装 CUDA
+4. 两个都失败 → 看 stderr，按 MinerU 官方 FAQ 排查（references 里有官方文档锚点）
+
+**v1.2.0.1 之前** 的版本会**静默**降级，不会报告 fallback 字段。升级到 v1.2.0.1 就能看到诊断信息。
