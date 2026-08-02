@@ -1,0 +1,7 @@
+interface:
+  display_name: "MinerU Local"
+  short_description: "本地 MinerU 跨 Windows / WSL 解析 PDF/Office/图片"
+  default_prompt: "Use $mineru-local to parse this document locally with MinerU; never upload to the cloud."
+
+policy:
+  allow_implicit_invocation: true

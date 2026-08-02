@@ -1,0 +1,58 @@
+# Python bytecode / cache
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+
+# Virtualenvs
+.venv/
+venv/
+env/
+.python-version
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.coverage.*
+
+# Logs / temp / backup
+*.log
+*.tmp
+*.bak
+*~
+*.swp
+*.swo
+
+# OS / editors / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.iml
+
+# AI / agent / editor state
+.codex/
+.agents/
+.agent/
+.claude/
+.cursor/
+.aider*
+.windsurf/
+.gemini/
+.continue/
+codex_tmp/
+*.codex-tmp
+
+# Project local test artefacts
+scripts/tests/x.pdf
+x.pdf
