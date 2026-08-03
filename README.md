@@ -1,12 +1,12 @@
 # mineru-local
 
-本地 MinerU 文档解析。**不上传文件、不用 MINERU_TOKEN、不接远端 API**。
+本地 `mineru` 命令的 wrapper：调用本机或 WSL Linux 中已安装的 `mineru` CLI，把 PDF / 图片 / DOCX / PPTX / XLSX 解析成 Markdown。**不上传文件、不用 MINERU_TOKEN、不接远端 API**。
 
 ## 它做什么
 
-- 把 PDF / 图片 / DOCX / PPTX / XLSX 解析成 Markdown
-- 跨 Windows / WSL-Ubuntu 自动选环境
-- 拒绝 mineru.net 云端 API、拒绝 MINERU_TOKEN
+- 调用本机或 WSL Linux conda env 中已安装的 `mineru` CLI，把 PDF / 图片 / DOCX / PPTX / XLSX 解析成 Markdown
+- 跨 Windows / WSL Linux 自动选环境与 backend（pipeline / vlm-engine / hybrid-engine），默认 `Ubuntu-24.04`，可通过 `MINERU_WSL_DISTRO` 或 `--wsl-distro` 覆盖为其他 distro（如 `Ubuntu-22.04` / `Debian`）
+- 守护本地不变式：拒绝 `mineru.net` 云端 API、拒绝 `MINERU_TOKEN`、拒绝指向远端的 `--api-url`
 
 ## 系统要求（必读）
 
@@ -20,7 +20,7 @@
 - **vLLM**（具体版本看 [MinerU 官方扩展模块安装](https://github.com/opendatalab/MinerU/blob/master/docs/zh/quick_start/extension_modules.md)）
 - **GPU 加速**（vLLM 主要支持 NVIDIA；具体兼容看 [MinerU 官方 FAQ](https://github.com/opendatalab/MinerU)）
 
-> **Windows 用户**：推荐 WSL Ubuntu（GPU 透传）。  
+> **Windows 用户**：推荐 WSL Linux（GPU 透传，默认 `Ubuntu-24.04`）。  
 > **Linux/macOS 用户**：直接在系统装 mineru 即可。
 
 > **没有 vLLM？** 你的解析质量会明显差于"原生 hybrid-engine"。skill 仍可用，报告里 `fallback.used=true` 会说明。
@@ -30,6 +30,13 @@
 `./install.sh` 或 `powershell -ExecutionPolicy Bypass -File install.ps1`
 
 会输出 JSON 报告，含 validate / unit_tests / mineru_doctor 三个 step 的状态。
+
+`install` 只做前置校验（找 Python → 跑 `quick_validate.py` → 跑 unit tests → 跑 `mineru_doctor`），**不会复制文件到 `$CODEX_HOME/skills/`**，因此重跑始终幂等，不会破坏已有 skill 目录。
+
+**如何更新**：Codex skill 的“安装”本质上是把整个 `mineru-local` 目录放到 `$CODEX_HOME/skills/mineru-local/`，因此更新方式取决于当初的安装来源：
+- 若通过 skill-installer 从 git 克隆：用 skill-installer 重新安装，或直接在 skill 目录里 `git pull`
+- 若手动 copy：重新拷贝新版 skill 目录覆盖即可
+- 若手动 git checkout：在 skill 目录里 `git pull`，然后再跑一次 `install.ps1` 重新校验依赖
 
 ## 关键环境变量
 

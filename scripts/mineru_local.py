@@ -516,22 +516,145 @@ def _sanitize_report_extras(extras: dict[str, str]) -> dict[str, str]:
     return scrubbed
 
 
-def _select_runtime(env_hint: str, backend: str) -> tuple[Optional[str], Optional[EnvironmentReport], Optional[EnvironmentReport]]:
+def _smoke_test(env_name: str, backend: str) -> tuple[bool, str]:
+    """Probe whether (env_name, backend) can actually parse a file.
+
+    Returns (passed, error_msg). error_msg is "" on pass.
+    Uses a 1-page PDF shipped in scripts/tests/smoke.pdf.
+    """
+    smoke_pdf = Path(__file__).resolve().parent / "tests" / "smoke.pdf"
+    if not smoke_pdf.is_file():
+        return (False, f"smoke.pdf not found at {smoke_pdf}")
+    tmp_out = Path(tempfile.mkdtemp(prefix="mineru-smoke-"))
+    try:
+        input_arg = _translate_input_for(env_name, smoke_pdf)
+        output_arg = _translate_output_for(env_name, tmp_out)
+        executable = _executable_for(env_name)
+        argv = _build_argv(
+            executable=executable, backend=backend, method="auto",
+            input_path=input_arg, output_dir=output_arg,
+            lang=None, start_page=None, end_page=None,
+            formula=None, table=None, image_analysis=None, effort=None,
+        )
+        rc, _out, err = _run_argv(env_name, argv, cwd=None)
+        if rc != 0:
+            last = [ln for ln in err.splitlines() if ln.strip()][-1] if err.strip() else ""
+            return (False, f"exit {rc}: {last[:120]}")
+        md = list(tmp_out.rglob("*.md"))
+        if not md:
+            return (False, "no markdown output")
+        if all(not _looks_non_empty(p) for p in md):
+            return (False, "empty markdown output")
+        return (True, "")
+    finally:
+        shutil.rmtree(tmp_out, ignore_errors=True)
+
+
+def _select_runtime(env_hint: str, backend: str) -> tuple[Optional[str], Optional[EnvironmentReport], Optional[EnvironmentReport], Optional[dict]]:
+    """Resolve the execution environment.
+
+    Returns (env_name, win_report, wsl_report, fallback_info).
+
+    fallback_info is None when no downgrade happened; otherwise it carries
+    requested_env, actual_env, requested_backend, actual_backend, reason,
+    and smoke_attempts (a list of {env, ok, error} dicts).
+
+    Explicit env (windows / wsl): hard error when unavailable or when the
+    requested backend is missing. No smoke test, no silent fallback.
+    Auto: probes WSL first, then Windows. For each env, runs a smoke
+    test before committing. Picks the first env that passes smoke.
+    """
     win = _probe_windows(DEFAULT_WINDOWS_EXECUTABLE)
     wsl = _probe_wsl(DEFAULT_WSL_DISTRO, DEFAULT_WSL_EXECUTABLE)
-    if env_hint == "windows":
-        return ("windows", win, wsl)
-    if env_hint == "wsl":
-        return ("wsl", win, wsl)
-    # auto
-    if wsl.available and backend in wsl.backends_usable:
-        return ("wsl", win, wsl)
-    if wsl.available:
-        return ("wsl", win, wsl)
-    if win.available:
-        return ("windows", win, wsl)
-    return (None, win, wsl)
+    requested_env = env_hint
+    requested_backend = backend
 
+    if env_hint == "windows":
+        if not win.available:
+            raise RuntimeError("--env windows requested but Windows mineru is not available")
+        if backend != "auto" and backend not in (win.backends_usable or []):
+            raise RuntimeError(
+                f"--env windows + backend {backend!r} requested but Windows cannot run it; "
+                f"Windows backends: {win.backends_usable}"
+            )
+        return ("windows", win, wsl, None)
+
+    if env_hint == "wsl":
+        if not wsl.available:
+            raise RuntimeError("--env wsl requested but WSL mineru is not available")
+        if backend != "auto" and backend not in (wsl.backends_usable or []):
+            raise RuntimeError(
+                f"--env wsl + backend {backend!r} requested but WSL cannot run it; "
+                f"WSL backends: {wsl.backends_usable}. "
+                f"Install vLLM in WSL: pip install mineru[core,vllm]"
+            )
+        return ("wsl", win, wsl, None)
+
+    attempts = []
+
+    def _fallback(actual_env, actual_backend, reason):
+        return {
+            "used": True,
+            "requested_env": requested_env,
+            "actual_env": actual_env,
+            "requested_backend": requested_backend,
+            "actual_backend": actual_backend,
+            "reason": reason,
+            "smoke_attempts": attempts,
+        }
+
+    wsl_usable = wsl.available and (backend == "auto" or backend in (wsl.backends_usable or []))
+    wsl_smoke_b = None
+    if wsl_usable:
+        wsl_smoke_b = backend if backend != "auto" else "hybrid-engine"
+        ok, err = _smoke_test("wsl", wsl_smoke_b)
+        attempts.append({"env": "wsl", "ok": ok, "error": err or None})
+        if ok:
+            return ("wsl", win, wsl, None)
+    else:
+        if not wsl.available:
+            attempts.append({"env": "wsl", "ok": False, "error": "WSL unavailable"})
+        else:
+            attempts.append({"env": "wsl", "ok": False, "error": f"backend {backend!r} not in {wsl.backends_usable}"})
+
+    # 2) Fall back to Windows. Try whichever backend Windows can run,
+    #    preferring the requested backend, otherwise pipeline.
+    def _win_smoke_backend():
+        if not win.backends_usable:
+            return None
+        if backend in win.backends_usable:
+            return backend
+        if "pipeline" in win.backends_usable:
+            return "pipeline"
+        return None
+
+    win_b = _win_smoke_backend()
+    if win_b is None:
+        if not win.available:
+            attempts.append({"env": "windows", "ok": False, "error": "Windows mineru not available"})
+        else:
+            attempts.append({"env": "windows", "ok": False, "error": f"no usable Windows backend (have {win.backends_usable})"})
+        return (None, win, wsl, _fallback(
+            "none", "none",
+            "no usable mineru environment (Windows+WSL both unavailable or smoke tests failed)",
+        ))
+
+    ok, err = _smoke_test("windows", win_b)
+    attempts.append({"env": "windows", "ok": ok, "error": err or None})
+    if ok:
+        if not wsl.available:
+            reason = f"WSL unavailable; using Windows {win_b}"
+        elif not wsl_usable:
+            reason = f"WSL cannot run {backend!r}; using Windows {win_b}"
+        else:
+            wsl_err = attempts[0]["error"] or "unknown"
+            reason = f"WSL smoke failed ({wsl_err}); using Windows {win_b}"
+        return ("windows", win, wsl, _fallback("windows", win_b, reason))
+
+    return (None, win, wsl, _fallback(
+        "none", "none",
+        "no usable mineru environment (Windows+WSL both unavailable or smoke tests failed)",
+    ))
 
 def _run_argv(
     env_name: str,
@@ -613,7 +736,7 @@ def default_output_base() -> Path:
     raise RuntimeError(f"too many {base_name}-* collisions in {parent}")
 
 
-def _build_output_layout(parent: Path, *, explicit: bool, batch: bool) -> dict:
+def _build_output_layout(parent: Path, *, explicit: bool, batch: bool, fallback: Optional[dict] = None) -> dict:
     """Build the output_layout block for the JSON report."""
     parent_str = str(parent)
     if explicit:
@@ -628,6 +751,8 @@ def _build_output_layout(parent: Path, *, explicit: bool, batch: bool) -> dict:
         )
     else:
         note = "minerU 会把每个文件再嵌一层 <doc-stem>/<method>/。"
+    if fallback and fallback.get("used"):
+        note = note + f" 注意：{fallback.get('reason', 'fallback used')}"
     example = str(parent / "<doc-stem>" / "<method>" / "<doc-stem>.md")
     return {"parent": parent_str, "note": note, "example": example}
 
@@ -661,12 +786,12 @@ def parse(args: argparse.Namespace) -> int:
 
     win = _probe_windows(DEFAULT_WINDOWS_EXECUTABLE)
     wsl = _probe_wsl(DEFAULT_WSL_DISTRO, DEFAULT_WSL_EXECUTABLE)
-    env_name, win2, wsl2 = _select_runtime(args.env, backend or "pipeline")
+    env_name, win2, wsl2, fallback_info = _select_runtime(args.env, backend or "pipeline")
     if env_name is None:
-        return _emit(
-            {"error": "neither Windows nor WSL conda mineru is available; run `doctor`"},
-            code=3,
-        )
+        payload = {"error": "no usable mineru environment; run `doctor` for details", "returncode": 6}
+        if fallback_info:
+            payload["fallback"] = {"used": True, **fallback_info}
+        return _emit(payload, code=6)
     report_env = wsl2 if env_name == "wsl" else win2
     if backend is None:
         if env_name == "wsl":
@@ -745,7 +870,11 @@ def parse(args: argparse.Namespace) -> int:
             "images": artifacts["images"],
         },
         "output_layout": _build_output_layout(
-            output_path, explicit=output_explicit, batch=False
+            output_path, explicit=output_explicit, batch=False, fallback=fallback_info
+        ),
+        "fallback": (
+            {"used": True, **fallback_info} if fallback_info
+            else {"used": False, "smoke_attempts": []}
         ),
         "command": cmd_repr,
     }

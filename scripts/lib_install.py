@@ -335,12 +335,19 @@ def run_mineru_doctor(skill_root: Path, python: str) -> dict[str, Any]:
             selected_backend = payload.get("selected_backend")
     except (json.JSONDecodeError, ValueError):
         pass
+    recommendation = None
+    if code == 0 and selected_env == "windows" and wsl2 is not None and not wsl2.available:
+        recommendation = (
+            "Only Windows mineru is available; consider installing WSL Ubuntu + vLLM "
+            "for hybrid-engine quality. See README '系统要求'."
+        )
     return {
         "ok": code == 0,
         "returncode": code,
         "selected_environment": selected_env,
         "selected_backend": selected_backend,
         "diagnostics": diagnostics,
+        "recommendation": recommendation,
     }
 
 

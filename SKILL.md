@@ -1,11 +1,11 @@
 ---
 name: mineru-local
-description: 本地 MinerU 文档解析，跨 Windows 与 WSL-Ubuntu 自动选择执行环境。PDF、图片、DOCX、PPTX、XLSX 一键转 Markdown，自动优先使用 WSL 中的 vLLM + hybrid-engine 高准确率解析；不调用 mineru.net 云 API、不上传文件、不使用 MINERU_TOKEN。使用场景：(1) 本地解析 PDF/Word/PPT/Excel/图片到 Markdown；(2) 扫描件 OCR 提取文字与公式；(3) 提取论文/教材中的表格、公式与图片资源；(4) 批量解析一个目录下的全部文档；(5) 用本地 vLLM 服务替代云端 VLM 进行高质量解析。
+description: 本地 `mineru` 命令的 wrapper：调用本机或 WSL Linux 中已安装的 `mineru` CLI，把 PDF/图片/DOCX/PPTX/XLSX 解析成 Markdown，跨 Windows 与 WSL Linux 自动选择执行环境（默认 `Ubuntu-24.04`，可通过 `MINERU_WSL_DISTRO` 覆盖），自动优先使用 WSL 中的 vLLM + hybrid-engine 高准确率解析；不调用 mineru.net 云 API、不上传文件、不使用 MINERU_TOKEN。使用场景：(1) 本地解析 PDF/Word/PPT/Excel/图片到 Markdown；(2) 扫描件 OCR 提取文字与公式；(3) 提取论文/教材中的表格、公式与图片资源；(4) 批量解析一个目录下的全部文档；(5) 用本地 vLLM 服务替代云端 VLM 进行高质量解析。
 ---
 
 # MinerU Local
 
-本地 MinerU 解析 wrapper，跨 **Windows conda `mineru`** 与 **WSL Ubuntu-24.04 conda `mineru`** 自动选环境。
+本地 `mineru` CLI 的 wrapper：调用本机 conda `mineru` 或 WSL Linux conda `mineru`（默认 `Ubuntu-24.04`，可通过 `MINERU_WSL_DISTRO` / `--wsl-distro` 覆盖），把 PDF / 图片 / Office 解析成 Markdown，并跨两个环境自动选优。
 
 ## 关键不变式
 
@@ -33,7 +33,7 @@ description: 本地 MinerU 文档解析，跨 Windows 与 WSL-Ubuntu 自动选�
    ```bash
    python C:\Users\azuresky\.codex\skills\mineru-local\scripts\mineru_local.py parse-dir --path <abs-dir> --output <abs-dir>
    ```
-   完成标准：退出码 `0`。
+   完成标准：退出码 `0`。如果 `fallback.used=true`（v1.2.0.1+），按报告里 `fallback.smoke_attempts` 排查。
 5. **验证产物**。报告必须含 `artifacts.markdown`（至少 1 个非空文件）。把报告里的 `host_path` 转交给用户；不要把 `/mnt/...` 这种 WSL 路径直接给到 Windows 用户。
 
 ## 解析调用示例

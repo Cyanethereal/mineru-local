@@ -1,7 +1,7 @@
 interface:
   display_name: "MinerU Local"
-  short_description: "本地 MinerU 跨 Windows / WSL 解析 PDF/Office/图片"
-  default_prompt: "Use $mineru-local to parse this document locally with MinerU; never upload to the cloud."
+  short_description: "本地 mineru CLI 的 wrapper：调用本机/WSL Linux 中已安装的 mineru 解析 PDF/Office/图片到 Markdown"
+  default_prompt: "Use $mineru-local to call the local mineru CLI (wrapper around the on-disk mineru command, Windows or WSL Linux); never upload to mineru.net and never use MINERU_TOKEN."
 
 policy:
   allow_implicit_invocation: true

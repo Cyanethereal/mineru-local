@@ -343,5 +343,120 @@ class DefaultOutputLayoutTests(unittest.TestCase):
         self.assertIn("<doc-stem>", layout["example"])
 
 
+
+
+class SelectRuntimeFallbackTests(unittest.TestCase):
+    """_select_runtime return contract: (env, win, wsl, fallback_info)."""
+
+    def setUp(self):
+        from unittest import mock
+        self._mocks = []
+        self.win_ok = ml.EnvironmentReport(available=True, executable="ignored",
+                                           backends_usable=["pipeline"])
+        self.win_limited = ml.EnvironmentReport(available=True, executable="ignored",
+                                                backends_usable=["pipeline"])
+        self.wsl_full = ml.EnvironmentReport(available=True, executable="ignored",
+                                             backends_usable=["pipeline", "vlm-engine", "hybrid-engine"],
+                                             distro="Ubuntu-24.04")
+        self.wsl_no_vllm = ml.EnvironmentReport(available=True, executable="ignored",
+                                                backends_usable=["pipeline"],
+                                                distro="Ubuntu-24.04")
+        self.wsl_unavail = ml.EnvironmentReport(available=False, executable="ignored",
+                                               reason="no wsl")
+        self.win_unavail = ml.EnvironmentReport(available=False, executable="ignored",
+                                               reason="no windows mineru")
+
+    def _patch(self, win, wsl, smoke_results):
+        from unittest import mock
+        idx = [0]
+        def fake_smoke(env, backend):
+            if idx[0] >= len(smoke_results):
+                return (True, "")
+            r = smoke_results[idx[0]]
+            idx[0] += 1
+            return r
+        p1 = mock.patch.object(ml, "_probe_windows", return_value=win)
+        p2 = mock.patch.object(ml, "_probe_wsl", return_value=wsl)
+        p3 = mock.patch.object(ml, "_smoke_test", side_effect=fake_smoke)
+        p1.start(); p2.start(); p3.start()
+        self._mocks.extend([p1, p2, p3])
+
+    def tearDown(self):
+        from unittest import mock
+        for p in self._mocks: p.stop()
+        self._mocks.clear()
+
+    def test_auto_prefers_wsl_smoke_passes(self):
+        self._patch(self.win_ok, self.wsl_full, [(True, "")])
+        env, _w, _s, fb = ml._select_runtime("auto", "hybrid-engine")
+        self.assertEqual(env, "wsl")
+        self.assertIsNone(fb)
+
+    def test_auto_falls_back_when_wsl_smoke_fails(self):
+        self._patch(self.win_limited, self.wsl_full, [(False, "no kernel image"), (True, "")])
+        env, _w, _s, fb = ml._select_runtime("auto", "hybrid-engine")
+        self.assertEqual(env, "windows")
+        self.assertIsNotNone(fb)
+        self.assertTrue(fb["used"])
+        self.assertEqual(fb["actual_env"], "windows")
+        self.assertEqual(fb["actual_backend"], "pipeline")
+        self.assertEqual(fb["requested_env"], "auto")
+        self.assertIn("WSL smoke failed", fb["reason"])
+        self.assertEqual(len(fb["smoke_attempts"]), 2)
+        self.assertEqual(fb["smoke_attempts"][0]["env"], "wsl")
+        self.assertFalse(fb["smoke_attempts"][0]["ok"])
+        self.assertEqual(fb["smoke_attempts"][1]["env"], "windows")
+        self.assertTrue(fb["smoke_attempts"][1]["ok"])
+
+    def test_auto_falls_back_when_wsl_lacks_backend(self):
+        self._patch(self.win_limited, self.wsl_no_vllm, [(True, "")])
+        env, _w, _s, fb = ml._select_runtime("auto", "hybrid-engine")
+        self.assertEqual(env, "windows")
+        self.assertIsNotNone(fb)
+        self.assertTrue(fb["used"])
+        self.assertIn("cannot run", fb["reason"])
+
+    def test_auto_hard_errors_when_both_smoke_fail(self):
+        self._patch(self.win_limited, self.wsl_full, [(False, "wsl err"), (False, "win err")])
+        env, _w, _s, fb = ml._select_runtime("auto", "hybrid-engine")
+        # _select_runtime does NOT raise; it returns (None, ..., fallback_info)
+        # so the caller (parse()) can produce a clean exit-6 report.
+        self.assertIsNone(env)
+        self.assertIsNotNone(fb)
+        self.assertTrue(fb["used"])
+        self.assertEqual(fb["actual_env"], "none")
+        self.assertEqual(len(fb["smoke_attempts"]), 2)
+        self.assertFalse(fb["smoke_attempts"][0]["ok"])
+        self.assertFalse(fb["smoke_attempts"][1]["ok"])
+
+    def test_explicit_windows_hard_errors_when_unavailable(self):
+        self._patch(self.win_unavail, self.wsl_full, [])
+        with self.assertRaises(RuntimeError) as cm:
+            ml._select_runtime("windows", "pipeline")
+        self.assertIn("Windows mineru is not available", str(cm.exception))
+
+    def test_explicit_wsl_hard_errors_when_backend_missing(self):
+        self._patch(self.win_ok, self.wsl_no_vllm, [])
+        with self.assertRaises(RuntimeError) as cm:
+            ml._select_runtime("wsl", "hybrid-engine")
+        self.assertIn("WSL cannot run", str(cm.exception))
+        self.assertIn("vLLM", str(cm.exception))
+
+    def test_explicit_wsl_hard_errors_when_unavailable(self):
+        self._patch(self.win_ok, self.wsl_unavail, [])
+        with self.assertRaises(RuntimeError) as cm:
+            ml._select_runtime("wsl", "pipeline")
+        self.assertIn("WSL mineru is not available", str(cm.exception))
+
+
+class SmokeTestInfrastructureTests(unittest.TestCase):
+    """Verify the smoke test artifact is shipped with the repo."""
+
+    def test_smoke_pdf_present(self):
+        smoke = Path(ml.__file__).resolve().parent / "tests" / "smoke.pdf"
+        self.assertTrue(smoke.is_file(), f"smoke.pdf missing at {smoke}")
+        self.assertGreater(smoke.stat().st_size, 0)
+
+
 if __name__ == "__main__":
     unittest.main()
