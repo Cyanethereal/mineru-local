@@ -1,93 +1,78 @@
 ---
 name: mineru-local
-description: 本地 `mineru` 命令的 wrapper：调用本机或 WSL Linux 中已安装的 `mineru` CLI，把 PDF/图片/DOCX/PPTX/XLSX 解析成 Markdown，跨 Windows 与 WSL Linux 自动选择执行环境（默认 `Ubuntu-24.04`，可通过 `MINERU_WSL_DISTRO` 覆盖），自动优先使用 WSL 中的 vLLM + hybrid-engine 高准确率解析；不调用 mineru.net 云 API、不上传文件、不使用 MINERU_TOKEN。使用场景：(1) 本地解析 PDF/Word/PPT/Excel/图片到 Markdown；(2) 扫描件 OCR 提取文字与公式；(3) 提取论文/教材中的表格、公式与图片资源；(4) 批量解析一个目录下的全部文档；(5) 用本地 vLLM 服务替代云端 VLM 进行高质量解析。
+description: 本地 MinerU PDF/Office 解析 wrapper：使用显式用户配置，支持 Windows 或 WSL、native/staged I/O，并输出可校验的 MinerUArtifactManifest。Use when user wants to parse PDF, DOCX, PPTX, XLSX, or images to Markdown locally; mentions MinerU, PDF parsing, OCR, formulas, or local document conversion.
 ---
 
 # MinerU Local
 
-本地 `mineru` CLI 的 wrapper：调用本机 conda `mineru` 或 WSL Linux conda `mineru`（默认 `Ubuntu-24.04`，可通过 `MINERU_WSL_DISTRO` / `--wsl-distro` 覆盖），把 PDF / 图片 / Office 解析成 Markdown，并跨两个环境自动选优。
+本地 `mineru` CLI 的 wrapper。它不上传文件、不使用远端 API，并把每次解析结果整理成 schema v1 的 `MinerUArtifactManifest`。
 
-## 关键不变式
+## 配置
 
-- **永远本地**：不向 `mineru.net` 上传文件，不读取或传递 `MINERU_TOKEN`，不接受 `vlm-http-client` / `hybrid-http-client` 指向远端 URL。
-- **自动环境选择**：默认 WSL（带 vLLM），WSL 不可用时回退到 Windows（仅 pipeline）。
-- **可验证成功**：包装器只报告 `returncode==0` **且**至少存在一个非空 Markdown 产物时为成功；否则返回错误码 5。
-
-## 工作流
-
-1. **确认输入**。用户提供的文件路径必须存在，且后缀为以下之一：
-   - `.pdf .png .jpg .jpeg .jp2 .webp .gif .bmp`
-   - `.doc .docx .ppt .pptx .xls .xlsx`
-   完成标准：`Path(input).is_file()` 且 `input.suffix.lower() in 支持列表`。
-2. **运行 doctor**。执行：
-   ```bash
-   python C:\Users\azuresky\.codex\skills\mineru-local\scripts\mineru_local.py doctor
-   ```
-   完成标准：退出码 `0`，`selected_environment` 不为 `null`。
-3. **选择环境与后端**。按 doctor 输出的 `selected_environment` / `selected_backend`；如用户显式传 `--env` 或 `--backend`，优先用户。Office 文件强制 `pipeline`；扫描件可设 `--method ocr`。
-4. **执行解析**。运行：
-   ```bash
-   python C:\Users\azuresky\.codex\skills\mineru-local\scripts\mineru_local.py parse --path <abs> --output <abs> [options]
-   ```
-   或批量：
-   ```bash
-   python C:\Users\azuresky\.codex\skills\mineru-local\scripts\mineru_local.py parse-dir --path <abs-dir> --output <abs-dir>
-   ```
-   完成标准：退出码 `0`。如果 `fallback.used=true`（v1.2.0.1+），按报告里 `fallback.smoke_attempts` 排查。
-5. **验证产物**。报告必须含 `artifacts.markdown`（至少 1 个非空文件）。把报告里的 `host_path` 转交给用户；不要把 `/mnt/...` 这种 WSL 路径直接给到 Windows 用户。
-
-## 解析调用示例
-
-单个 PDF（默认 WSL + hybrid-engine）：
+配置保存在 Skill 载荷之外的平台配置目录。先登记实际可执行文件，不依赖源码中的用户路径：
 
 ```powershell
-python C:\Users\azuresky\.codex\skills\mineru-local\scripts\mineru_local.py parse `
-  --path "C:\eReading\pika资源共享\开源资料\代数学基础\A4noindex2.pdf" `
-  --output "C:\Users\azuresky\Documents\mineru-out"
+$MineruScript = Join-Path $env:CODEX_HOME "skills\mineru-local\scripts\mineru_local.py"
+
+python $MineruScript config set `
+  --wsl-executable "/home/<user>/miniconda3/envs/mineru/bin/mineru" `
+  --wsl-distro "Ubuntu-24.04" `
+  --default-env wsl `
+  --io-policy auto
+
+python $MineruScript doctor
 ```
 
-Windows pipeline（不需要 vLLM）：
+配置优先级固定为：显式 CLI > 环境变量 > 持久化配置 > 明确失败。
+
+## 常用命令
 
 ```powershell
-python C:\Users\azuresky\.codex\skills\mineru-local\scripts\mineru_local.py parse `
-  --path "C:\path\paper.pdf" `
-  --output "C:\path\out" `
-  --env windows `
-  --backend pipeline
+# 单文件；--output 必须是新目录或空目录
+python $MineruScript parse `
+  --path "C:\docs\lecture.pdf" `
+  --output "C:\temp\lecture-raw" `
+  --env wsl `
+  --backend hybrid-engine
+
+# 批量目录；stdout 是一个 JSON 文档
+python $MineruScript parse-dir `
+  --path "C:\docs" `
+  --output "C:\temp\batch-raw"
+
+# 从已有 raw tree 离线重建 manifest
+python $MineruScript manifest `
+  --path "C:\docs\lecture.pdf" `
+  --output "C:\temp\lecture-raw" `
+  --env wsl `
+  --backend hybrid-engine `
+  --method auto `
+  --io-mode staged
 ```
-
-扫描件 OCR：
-
-```powershell
-python C:\Users\azuresky\.codex\skills\mineru-local\scripts\mineru_local.py parse `
-  --path "C:\path\scan.pdf" `
-  --output "C:\path\out" `
-  --method ocr `
-  --lang ch
-```
-
-批量目录：
-
-```powershell
-python C:\Users\azuresky\.codex\skills\mineru-local\scripts\mineru_local.py parse-dir `
-  --path "D:\docs" `
-  --output "D:\docs-out"
-```
-
-## 失败与回退
-
-- **WSL 不可用**：doctor 返回 `wsl.available=false` → 回退 Windows + pipeline。报告里会有 `reason` 字段说明。
-- **hybrid-engine 报 CUDA kernel 错误**：包装器不会自动切换云端；请改用 `--env windows --backend pipeline` 或升级 `lmdeploy`。
-- **MINERU_TOKEN / MINERU_API_URL 出现在环境**：包装器会主动从子进程环境移除，不会把它们透传。
-- **远端 `--api-url`**：被拒（hostname 解析后必须落在 127.0.0.0/8 或 ::1）。要使用 vLLM 外部服务时，请把服务启动在 `127.0.0.1`，并通过 `--env wsl --backend hybrid-http-client` 之外的方式接入；本 skill 不支持。
-- **OCR 后 VLM 二次校验**：本 skill 第一版不内置；如需 VLM 校验，请用 vLLM 或 Ollama 单独读产物图片。
 
 ## 子命令
 
 | 子命令 | 用途 |
-|--------|------|
-| `doctor` | 探测 Windows/WSL/Ollama，输出 JSON 决策 |
-| `parse` | 解析单个文件或目录，返回 JSON 报告 |
-| `parse-dir` | 递归解析目录下所有受支持文件 |
+|---|---|
+| `doctor` | 探测配置、环境和可用 backend |
+| `parse` | 解析单个文件并写出 manifest |
+| `parse-dir` | 批量解析，结果嵌入单个 JSON 的 `results` |
+| `manifest` | 从已有 raw output tree 重建 manifest |
+| `config show` | 显示配置路径、原始配置和解析来源 |
+| `config set` | 持久化 WSL/Windows 可执行文件、distro、默认环境和 I/O 策略 |
 
-详细参数表与产物目录结构见 `references/local_cli.md`；CUDA、模型缓存、WSL GPU 不可见等故障排查见 `references/troubleshooting.md`。
+## 执行与产物规则
+
+- 自动环境选择优先 WSL；显式 `--env` 不会静默回退。
+- `io_policy: auto` 在跨 Windows/WSL 边界时解析为 `staged`。
+- staged 输入在复制前计算 SHA256，复制后验证 WSL 副本，再启动 MinerU。
+- WSL 临时目录 cleanup 失败是显式错误。
+- `--output` 非空时拒绝解析，避免旧产物污染 manifest。
+- 成功标准：child returncode 为 0，manifest 有且仅有一个非空 primary Markdown。
+- 可恢复的 stdout/stderr 诊断保留为 warning；非零退出是 blocking error。
+- Office 输入强制 `pipeline`，并拒绝 `--method ocr`。
+
+## 详细参考
+
+- CLI、输出结构和退出码：`references/local_cli.md`
+- 配置、CUDA、WSL 与 GPU 排查：`references/troubleshooting.md`

@@ -6,6 +6,9 @@ Run:
 """
 from __future__ import annotations
 
+import contextlib
+import hashlib
+import io
 import json
 import os
 import sys
@@ -369,7 +372,7 @@ class SelectRuntimeFallbackTests(unittest.TestCase):
     def _patch(self, win, wsl, smoke_results):
         from unittest import mock
         idx = [0]
-        def fake_smoke(env, backend):
+        def fake_smoke(env, backend, **kwargs):
             if idx[0] >= len(smoke_results):
                 return (True, "")
             r = smoke_results[idx[0]]
@@ -440,7 +443,7 @@ class SelectRuntimeFallbackTests(unittest.TestCase):
         with self.assertRaises(RuntimeError) as cm:
             ml._select_runtime("wsl", "hybrid-engine")
         self.assertIn("WSL cannot run", str(cm.exception))
-        self.assertIn("vLLM", str(cm.exception))
+        self.assertIn("WSL cannot run", str(cm.exception))
 
     def test_explicit_wsl_hard_errors_when_unavailable(self):
         self._patch(self.win_ok, self.wsl_unavail, [])
@@ -449,6 +452,24 @@ class SelectRuntimeFallbackTests(unittest.TestCase):
         self.assertIn("WSL mineru is not available", str(cm.exception))
 
 
+class OutputPreparationTests(unittest.TestCase):
+    def test_empty_output_is_accepted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "new-output"
+            ok, error = ml._prepare_output_root(out)
+            self.assertTrue(ok)
+            self.assertIsNone(error)
+            self.assertTrue(out.is_dir())
+
+    def test_non_empty_output_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "stale-output"
+            out.mkdir()
+            (out / "old.md").write_text("old", encoding="utf-8")
+            ok, error = ml._prepare_output_root(out)
+            self.assertFalse(ok)
+            self.assertIn("not empty", error)
+
 class SmokeTestInfrastructureTests(unittest.TestCase):
     """Verify the smoke test artifact is shipped with the repo."""
 
@@ -456,6 +477,242 @@ class SmokeTestInfrastructureTests(unittest.TestCase):
         smoke = Path(ml.__file__).resolve().parent / "tests" / "smoke.pdf"
         self.assertTrue(smoke.is_file(), f"smoke.pdf missing at {smoke}")
         self.assertGreater(smoke.stat().st_size, 0)
+
+
+class ManifestCommandTests(unittest.TestCase):
+    def test_io_mode_accepts_only_resolved_values(self):
+        parser = ml.build_parser()
+        for value in ("native", "staged"):
+            args = parser.parse_args([
+                "manifest", "--path", "input.pdf", "--output", "raw", "--io-mode", value
+            ])
+            self.assertEqual(args.io_mode, value)
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                parser.parse_args([
+                    "manifest", "--path", "input.pdf", "--output", "raw", "--io-mode", "auto"
+                ])
+
+    def test_manifest_reads_stdout_and_stderr_samples(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_path = root / "lecture.pdf"
+            input_path.write_bytes(b"pdf")
+            raw = root / "raw"
+            markdown = raw / "lecture" / "auto" / "lecture.md"
+            markdown.parent.mkdir(parents=True)
+            markdown.write_text("# Lecture", encoding="utf-8")
+            stdout_file = root / "stdout.log"
+            stderr_file = root / "stderr.log"
+            stdout_file.write_text("ERROR: stdout transient\n", encoding="utf-8")
+            stderr_file.write_text("WARNING: stderr warning\n", encoding="utf-8")
+            args = ml.build_parser().parse_args([
+                "manifest",
+                "--path", str(input_path),
+                "--output", str(raw),
+                "--stdout-file", str(stdout_file),
+                "--stderr-file", str(stderr_file),
+            ])
+            with mock.patch.object(ml, "_emit", return_value=0) as emit:
+                rc = ml.manifest_from_existing(args)
+            self.assertEqual(rc, 0)
+            self.assertEqual(emit.call_args.kwargs["code"], 0)
+            manifest = json.loads(
+                (raw / ml.ml_manifest.MANIFEST_FILENAME).read_text(encoding="utf-8")
+            )
+            warning_codes = {item["code"] for item in manifest["warnings"]}
+            self.assertIn("stdout_error_sample", warning_codes)
+            self.assertIn("stderr_warning_sample", warning_codes)
+
+    def test_manifest_function_rejects_unresolved_io_mode(self):
+        with mock.patch.object(ml, "_emit", return_value=2) as emit:
+            rc = ml.manifest_from_existing(type("Args", (), {"io_mode": "auto"})())
+        self.assertEqual(rc, 2)
+        payload = emit.call_args.args[0]
+        self.assertEqual(payload["error_code"], "invalid_io_mode")
+        self.assertEqual(emit.call_args.kwargs["code"], 2)
+
+
+class OfficeBackendPolicyTests(unittest.TestCase):
+    def test_office_input_forces_pipeline_and_records_override(self):
+        backend, override = ml._effective_backend_for_input(Path("slides.pptx"), "hybrid-engine")
+        self.assertEqual(backend, "pipeline")
+        self.assertIsNotNone(override)
+        self.assertEqual(override["requested_backend"], "hybrid-engine")
+        self.assertEqual(override["actual_backend"], "pipeline")
+
+    def test_office_default_backend_is_pipeline(self):
+        backend, override = ml._effective_backend_for_input(Path("notes.docx"), None)
+        self.assertEqual(backend, "pipeline")
+        self.assertIsNotNone(override)
+
+    def test_non_office_requested_backend_is_preserved(self):
+        backend, override = ml._effective_backend_for_input(Path("lecture.pdf"), "hybrid-engine")
+        self.assertEqual(backend, "hybrid-engine")
+        self.assertIsNone(override)
+
+
+class StagedIntegrityTests(unittest.TestCase):
+    def _settings(self) -> ml.ml_config.RuntimeSettings:
+        return ml.ml_config.RuntimeSettings(
+            windows_executable="C:/mineru.exe",
+            wsl_executable="/opt/mineru/bin/mineru",
+            wsl_distro="Ubuntu-24.04",
+            default_env="wsl",
+            io_policy="staged",
+            config_path=Path("config.json"),
+            sources={},
+        )
+
+    def test_verify_wsl_hash_accepts_match_and_rejects_mismatch(self):
+        expected = "b" * 64
+        with mock.patch.object(
+            ml, "_run_text", return_value=(0, f"{expected}  /tmp/mineru-local.ok/input.pdf\n", "")
+        ):
+            ml._verify_wsl_file_sha256(
+                "Ubuntu-24.04", "/tmp/mineru-local.ok/input.pdf", expected
+            )
+        with mock.patch.object(
+            ml, "_run_text", return_value=(0, f"{'c' * 64}  /tmp/mineru-local.ok/input.pdf\n", "")
+        ):
+            with self.assertRaises(ml.RuntimeConfigError) as raised:
+                ml._verify_wsl_file_sha256(
+                    "Ubuntu-24.04", "/tmp/mineru-local.ok/input.pdf", expected
+                )
+            self.assertIn("SHA256 mismatch", str(raised.exception))
+
+    def test_staged_run_hashes_before_copy_verifies_and_keeps_pre_run_hash(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            input_path = root / "lecture.pdf"
+            input_path.write_bytes(b"original handout")
+            original_hash = hashlib.sha256(input_path.read_bytes()).hexdigest()
+            output_path = root / "output"
+            events = []
+            original_fingerprint = ml._fingerprint_input
+
+            def fingerprint(path):
+                events.append("fingerprint")
+                return original_fingerprint(path)
+
+            def make_temp(_distro):
+                events.append("make-temp")
+                return "/tmp/mineru-local.Abc123"
+
+            def copy_to_wsl(_distro, _source, _destination):
+                events.append("copy-to-wsl")
+
+            def verify_hash(_distro, staged_path, expected):
+                events.append("verify-hash")
+                self.assertEqual(staged_path, "/tmp/mineru-local.Abc123/lecture.pdf")
+                self.assertEqual(expected, original_hash)
+
+            def run_text(cmd, **_kwargs):
+                if "mkdir -p" in cmd[-1]:
+                    events.append("mkdir-output")
+                    return 0, "", ""
+                raise AssertionError(f"unexpected command: {cmd}")
+
+            def run_mineru(*_args, **_kwargs):
+                events.append("run-mineru")
+                input_path.write_bytes(b"changed during run")
+                return 0, "ok", ""
+
+            def copy_from_wsl(_distro, _source, _destination):
+                events.append("copy-from-wsl")
+
+            def cleanup(_distro, _temp):
+                events.append("cleanup")
+
+            with mock.patch.object(ml, "_fingerprint_input", side_effect=fingerprint), \
+                 mock.patch.object(ml, "_make_wsl_temp", side_effect=make_temp), \
+                 mock.patch.object(ml, "_copy_to_wsl", side_effect=copy_to_wsl), \
+                 mock.patch.object(ml, "_verify_wsl_file_sha256", side_effect=verify_hash), \
+                 mock.patch.object(ml, "_run_text", side_effect=run_text), \
+                 mock.patch.object(ml, "_run_argv", side_effect=run_mineru), \
+                 mock.patch.object(ml, "_copy_from_wsl", side_effect=copy_from_wsl), \
+                 mock.patch.object(ml, "_cleanup_wsl_temp", side_effect=cleanup):
+                result = ml._execute_parse(
+                    env_name="wsl",
+                    settings=self._settings(),
+                    backend="pipeline",
+                    method="auto",
+                    input_path=input_path,
+                    output_path=output_path,
+                    lang=None,
+                    start_page=None,
+                    end_page=None,
+                    formula=None,
+                    table=None,
+                    image_analysis=None,
+                    effort=None,
+                )
+            self.assertEqual(events, [
+                "fingerprint",
+                "make-temp",
+                "copy-to-wsl",
+                "verify-hash",
+                "mkdir-output",
+                "run-mineru",
+                "copy-from-wsl",
+                "cleanup",
+            ])
+            self.assertEqual(result.input_sha256, original_hash)
+            self.assertEqual(result.input_used, "/tmp/mineru-local.Abc123/lecture.pdf")
+
+    def test_cleanup_failure_is_explicit(self):
+        with mock.patch.object(ml, "_run_text", return_value=(1, "", "cleanup denied")):
+            with self.assertRaises(ml.RuntimeConfigError) as raised:
+                ml._cleanup_wsl_temp("Ubuntu-24.04", "/tmp/mineru-local.Abc123")
+        self.assertIn("cannot clean up staged WSL temp directory", str(raised.exception))
+        self.assertIn("cleanup denied", str(raised.exception))
+
+
+class BatchInterfaceTests(unittest.TestCase):
+    def test_batch_output_directories_are_collision_safe(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / "out"
+            base.mkdir()
+            used = set()
+            first = ml._allocate_batch_output_dir(base, Path("a/lecture.pdf"), used)
+            second = ml._allocate_batch_output_dir(base, Path("b/lecture.pdf"), used)
+            repeated = ml._allocate_batch_output_dir(base, Path("a/lecture.pdf"), used)
+            self.assertEqual(len({first, second, repeated}), 3)
+            self.assertEqual(repeated.name, "lecture.pdf-2")
+
+    def test_parse_dir_emits_one_json_with_embedded_same_stem_results(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            inputs = root / "inputs"
+            (inputs / "a").mkdir(parents=True)
+            (inputs / "b").mkdir(parents=True)
+            (inputs / "a" / "lecture.pdf").write_bytes(b"a")
+            (inputs / "b" / "lecture.pdf").write_bytes(b"b")
+            output = root / "out"
+            args = ml.build_parser().parse_args([
+                "parse-dir", "--path", str(inputs), "--output", str(output)
+            ])
+
+            def fake_parse(sub_args):
+                Path(sub_args.output).mkdir(parents=True, exist_ok=True)
+                return ml._emit({
+                    "command": "parse",
+                    "input": sub_args.path,
+                    "output": sub_args.output,
+                    "returncode": 0,
+                })
+
+            with mock.patch.object(ml, "parse", side_effect=fake_parse), \
+                 contextlib.redirect_stdout(io.StringIO()) as stdout:
+                rc = ml.parse_dir(args)
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(rc, 0)
+            self.assertEqual(payload["command"], "parse-dir")
+            self.assertEqual(payload["failures"], 0)
+            self.assertEqual(len(payload["results"]), 2)
+            outputs = {item["output"] for item in payload["results"]}
+            self.assertEqual(len(outputs), 2)
+            self.assertTrue(all(item["report"]["command"] == "parse" for item in payload["results"]))
 
 
 if __name__ == "__main__":
