@@ -244,11 +244,21 @@ class DoctorSelectionTests(unittest.TestCase):
                                    backends_usable=["pipeline"])
         wsl = ml.EnvironmentReport(available=False, executable="wsl",
                                    reason="missing")
+        settings = ml.ml_config.RuntimeSettings(
+            windows_executable=None,
+            wsl_executable=None,
+            wsl_distro=None,
+            default_env="auto",
+            io_policy="auto",
+            config_path=Path("config.json"),
+            sources={},
+        )
         ml._probe_windows = lambda _: win  # type: ignore
         ml._probe_wsl = lambda _, __: wsl  # type: ignore
         captured = {}
         ml._emit = lambda p, code=0: (captured.update(p) or 0)  # type: ignore
-        ml.doctor(ml.build_parser().parse_args(["doctor"]))
+        with mock.patch.object(ml.ml_config, "resolve_settings", return_value=settings):
+            ml.doctor(ml.build_parser().parse_args(["doctor"]))
         self.assertEqual(captured["selected_environment"], "windows")
         self.assertEqual(captured["selected_backend"], "pipeline")
 
