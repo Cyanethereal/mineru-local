@@ -1,4 +1,4 @@
-# MinerU 本地 CLI 速查
+﻿# MinerU 本地 CLI 速查
 
 本文只描述 `scripts/mineru_local.py` 的实际行为。所有子命令都只向 stdout 写 JSON；不要把 stdout 当作普通日志流。
 

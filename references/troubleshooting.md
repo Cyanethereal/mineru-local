@@ -1,4 +1,4 @@
-# MinerU Local Troubleshooting
+﻿# MinerU Local Troubleshooting
 
 ## Configuration cannot be found
 

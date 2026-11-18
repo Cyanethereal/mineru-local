@@ -1,4 +1,4 @@
-# mineru-local
+﻿# mineru-local
 
 本地 `mineru` 命令的 wrapper：调用本机或 WSL Linux 中已安装的 `mineru` CLI，把 PDF / 图片 / DOCX / PPTX / XLSX 解析成 Markdown。**不上传文件、不用 MINERU_TOKEN、不接远端 API**。
 
