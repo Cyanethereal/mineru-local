@@ -71,6 +71,8 @@ python $MineruScript manifest `
 - 成功标准：child returncode 为 0，manifest 有且仅有一个非空 primary Markdown。
 - 可恢复的 stdout/stderr 诊断保留为 warning；非零退出是 blocking error。
 - Office 输入强制 `pipeline`，并拒绝 `--method ocr`。
+- .doc/.ppt 是 legacy 格式，必须在调用本 wrapper 前转换成 .pdf、.docx 或 .pptx；直接调用返回 legacy_conversion_required，不会启动 MinerU。
+- SWF 和未知扩展名不在解析范围内，不会自动转换或抽取关键帧。
 
 ## 详细参考
 

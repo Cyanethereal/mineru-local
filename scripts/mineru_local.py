@@ -65,14 +65,13 @@ SUPPORTED_SUFFIXES = (
     ".webp",
     ".gif",
     ".bmp",
-    ".doc",
     ".docx",
-    ".ppt",
     ".pptx",
     ".xls",
     ".xlsx",
 )
-OFFICE_SUFFIXES = (".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx")
+LEGACY_CONVERSION_SUFFIXES = (".doc", ".ppt")
+OFFICE_SUFFIXES = (".docx", ".pptx", ".xls", ".xlsx")
 REMOTE_TOKEN_VARS = ("MINERU_TOKEN", "MINERU_API_URL", "MINERU_API_TOKEN")
 
 
@@ -1155,7 +1154,16 @@ def parse(args: argparse.Namespace) -> int:
     input_path = Path(args.path).expanduser().resolve()
     if not input_path.exists() or not input_path.is_file():
         return _emit({"error": f"input not found: {input_path}"}, code=2)
-    if input_path.suffix.lower() not in SUPPORTED_SUFFIXES:
+    suffix = input_path.suffix.lower()
+    if suffix in LEGACY_CONVERSION_SUFFIXES:
+        return _emit({
+            "error": "legacy Office format requires explicit conversion before parsing",
+            "error_code": "legacy_conversion_required",
+            "suffix": suffix,
+            "suggested_formats": [".pdf", ".docx", ".pptx"],
+            "input": str(input_path),
+        }, code=2)
+    if suffix not in SUPPORTED_SUFFIXES:
         return _emit({"error": f"unsupported suffix: {input_path.suffix}"}, code=2)
 
     backend, backend_override = _effective_backend_for_input(input_path, backend)
@@ -1438,12 +1446,26 @@ def parse_dir(args: argparse.Namespace) -> int:
     folder = Path(args.path).expanduser().resolve()
     if not folder.is_dir():
         return _emit({"error": f"not a directory: {folder}"}, code=2)
+    legacy_files = sorted(
+        p for p in folder.rglob("*")
+        if p.is_file() and p.suffix.lower() in LEGACY_CONVERSION_SUFFIXES
+    )
     files = sorted(
         p for p in folder.rglob("*")
         if p.is_file() and p.suffix.lower() in SUPPORTED_SUFFIXES
     )
+    legacy_relative = [p.relative_to(folder).as_posix() for p in legacy_files]
     if not files:
-        return _emit({"error": f"no supported files under {folder}"}, code=2)
+        return _emit({
+            "error": "no directly supported files under folder",
+            "error_code": (
+                "legacy_conversion_required"
+                if legacy_files
+                else "unsupported_input_format"
+            ),
+            "legacy_conversion_required": legacy_relative,
+            "input": str(folder),
+        }, code=2)
     base_out_explicit = bool(args.output)
     if base_out_explicit:
         base_out = Path(args.output).expanduser().resolve()
@@ -1452,7 +1474,7 @@ def parse_dir(args: argparse.Namespace) -> int:
     base_out.mkdir(parents=True, exist_ok=True)
 
     results: list[dict[str, Any]] = []
-    failures = 0
+    failures = len(legacy_files)
     used_outputs: set[str] = set()
     for file_path in files:
         relative_path = file_path.relative_to(folder)
@@ -1496,6 +1518,7 @@ def parse_dir(args: argparse.Namespace) -> int:
         "files": [str(p) for p in files],
         "results": results,
         "failures": failures,
+        "legacy_conversion_required": legacy_relative,
     }
     return _emit(summary, code=0 if failures == 0 else 1)
 

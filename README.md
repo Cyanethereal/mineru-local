@@ -8,6 +8,13 @@
 - 跨 Windows / WSL Linux 选择环境与 backend（pipeline / vlm-engine / hybrid-engine）；WSL distro 与可执行文件由 CLI、环境变量或持久化配置显式提供
 - 守护本地不变式：拒绝 `mineru.net` 云端 API、拒绝 `MINERU_TOKEN`、拒绝指向远端的 `--api-url`
 
+## 输入格式预检
+
+- 可直接解析：.pdf、图片、.docx、.pptx、.xls、.xlsx。
+- 旧版 Office：.doc、.ppt 必须先进行显式格式转换；wrapper 返回 legacy_conversion_required，不会调用 MinerU。
+- 不支持 SWF 或其他非文档格式；不会尝试自动抽取动画。
+- parse-dir 会报告需要转换的 legacy 文件，而不是执意调用 MinerU。
+
 ## 系统要求（必读）
 
 **基本解析（pipeline）**：

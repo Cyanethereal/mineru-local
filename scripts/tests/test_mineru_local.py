@@ -562,6 +562,69 @@ class OfficeBackendPolicyTests(unittest.TestCase):
         self.assertIsNone(override)
 
 
+class LegacyInputPreflightTests(unittest.TestCase):
+    def _settings(self):
+        return ml.ml_config.RuntimeSettings(
+            windows_executable=None,
+            wsl_executable=None,
+            wsl_distro=None,
+            default_env="auto",
+            io_policy="auto",
+            config_path=Path("config.json"),
+            sources={},
+        )
+
+    def test_single_legacy_file_is_rejected_before_runtime(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            legacy = root / "legacy.ppt"
+            legacy.write_bytes(b"not a parsed document")
+            output = root / "output"
+            args = ml.build_parser().parse_args([
+                "parse", "--path", str(legacy), "--output", str(output)
+            ])
+            captured = {}
+            with mock.patch.object(
+                ml.ml_config, "resolve_settings", return_value=self._settings()
+            ), mock.patch.object(ml, "_select_runtime") as select_runtime, mock.patch.object(
+                ml, "_emit", side_effect=lambda payload, code=0: captured.update(
+                    {"payload": payload, "code": code}
+                ) or code
+            ):
+                rc = ml.parse(args)
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(captured["payload"]["error_code"], "legacy_conversion_required")
+            self.assertEqual(captured["payload"]["suffix"], ".ppt")
+            self.assertIn(".pdf", captured["payload"]["suggested_formats"])
+            select_runtime.assert_not_called()
+            self.assertFalse(output.exists())
+
+    def test_parse_dir_reports_legacy_files_without_starting_a_parse(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            legacy = root / "legacy.doc"
+            legacy.write_bytes(b"not a parsed document")
+            output = root / "output"
+            args = ml.build_parser().parse_args([
+                "parse-dir", "--path", str(root), "--output", str(output)
+            ])
+            captured = {}
+            with mock.patch.object(
+                ml, "_capture_parse_report"
+            ) as capture_parse, mock.patch.object(
+                ml, "_emit", side_effect=lambda payload, code=0: captured.update(
+                    {"payload": payload, "code": code}
+                ) or code
+            ):
+                rc = ml.parse_dir(args)
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(captured["payload"]["error_code"], "legacy_conversion_required")
+            self.assertEqual(captured["payload"]["legacy_conversion_required"], ["legacy.doc"])
+            capture_parse.assert_not_called()
+            self.assertFalse(output.exists())
+
 class StagedIntegrityTests(unittest.TestCase):
     def _settings(self) -> ml.ml_config.RuntimeSettings:
         return ml.ml_config.RuntimeSettings(
